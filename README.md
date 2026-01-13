@@ -1,7 +1,7 @@
 ```markdown
-# rstr - Rust TUI Search Tool
+# rstr - String Search Tool
 
-`rstr` is a CLI written in Rust. It allows you to search for text patterns in files using regex and provides an TUI to display the results.
+rstr is a CLI written in Rust. It allows you to search for text patterns in files using regex and provides an TUI to display the results.
 ```
 
 ## Usage

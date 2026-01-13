@@ -33,46 +33,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let regex = Regex::new(&args.pattern)?;
 
     let mut terminal = setup_terminal()?;
-    draw_loading(&mut terminal, &args.pattern)?;
+    
+    let mut results = Vec::new();
+    let mut last_tick = std::time::Instant::now();
+    let mut animation_frame = 0;
+    
+    let walker = WalkDir::new(&args.path).into_iter().filter_map(|e| e.ok());
+    
+    for entry in walker {
+        let path = entry.path();
+        if path.is_file() {
+            if last_tick.elapsed() >= std::time::Duration::from_millis(50) {
+                animation_frame = (animation_frame + 1) % 4;
+                draw_loading(&mut terminal, &args.pattern, path.to_str().unwrap_or(""), animation_frame)?;
+                last_tick = std::time::Instant::now();
 
-    let results = search_files(&args.path, &regex);
+                //exit during loading
+                if event::poll(std::time::Duration::from_millis(0))? {
+                    if let Event::Key(key) = event::read()? {
+                        if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                            restore_terminal(&mut terminal)?;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+
+            if let Ok(file) = File::open(path) {
+                let reader = BufReader::new(file);
+                for (i, line) in reader.lines().enumerate() {
+                    if let Ok(line) = line {
+                        if regex.is_match(&line) {
+                            results.push(format!("{}:{} : {}", path.display(), i + 1, line));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     run_ui(&mut terminal, &args.pattern, results)?;
     restore_terminal(&mut terminal)?;
 
     Ok(())
-}
-
-fn search_files(base_path: &PathBuf, regex: &Regex) -> Vec<String> {
-    let mut results = Vec::new();
-
-    for entry in WalkDir::new(base_path).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-
-        if !path.is_file() {
-            continue;
-        }
-
-        let file = match File::open(path) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-
-        let reader = BufReader::new(file);
-
-        for (i, line) in reader.lines().enumerate() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-
-            if regex.is_match(&line) {
-                results.push(format!("{}:{} : {}", path.display(), i + 1, line));
-            }
-        }
-    }
-
-    results
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>, io::Error> {
@@ -99,24 +102,35 @@ fn restore_terminal(
 fn draw_loading(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     pattern: &str,
+    current_file: &str,
+    animation_frame: usize,
 ) -> io::Result<()> {
+    let dots = match animation_frame {
+        1 => ".  ",
+        2 => ".. ",
+        3 => "...",
+        _ => "   ",
+    };
+
     terminal
-        .draw(|f| {
+        .draw(|frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(3), Constraint::Min(0)])
-                .split(f.area());
+                .split(frame.area());
 
             let header = Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" Search term: '{}' (Exit: q) ", pattern));
 
-            let loading = Block::default()
-                .borders(Borders::ALL)
-                .title(" Searching... ");
+            let loading_text = format!(" Searching{} ", dots);
+            let loading_content = format!("Current file: {}", current_file);
 
-            f.render_widget(header, chunks[0]);
-            f.render_widget(loading, chunks[1]);
+            let loading = List::new(vec![ListItem::new(loading_content)])
+                .block(Block::default().borders(Borders::ALL).title(loading_text));
+
+            frame.render_widget(header, chunks[0]);
+            frame.render_widget(loading, chunks[1]);
         })
         .map(|_| ())
 }
@@ -126,11 +140,11 @@ fn draw_results<'a>(
     pattern: &str,
     results: &[String],
 ) -> std::io::Result<CompletedFrame<'a>> {
-    terminal.draw(|f| {
+    terminal.draw(|frame| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(0)])
-            .split(f.area());
+            .split(frame.area());
 
         let header = Block::default()
             .borders(Borders::ALL)
@@ -141,8 +155,8 @@ fn draw_results<'a>(
         let list =
             List::new(items).block(Block::default().borders(Borders::ALL).title(" Found in "));
 
-        f.render_widget(header, chunks[0]);
-        f.render_widget(list, chunks[1]);
+        frame.render_widget(header, chunks[0]);
+        frame.render_widget(list, chunks[1]);
     })
 }
 
